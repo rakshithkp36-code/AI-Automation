@@ -3,9 +3,6 @@ import bcrypt from 'bcryptjs';
 import { query, initSchema } from './index.js';
 
 export async function seedDatabase() {
-  console.log('[Seed] Initializing database schema...');
-  await initSchema();
-
   console.log('[Seed] Checking if database is already seeded...');
   const existingOrgs = await query('SELECT id FROM organizations LIMIT 1');
   if (existingOrgs.rows.length > 0) {

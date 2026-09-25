@@ -104,7 +104,9 @@ export async function ensureDatabaseReady() {
         await seedDatabase();
         dbReady = true;
       } catch (err) {
+        initPromise = null;
         console.error('[Database Init Error]', err);
+        throw err;
       }
     })();
   }
@@ -113,8 +115,15 @@ export async function ensureDatabaseReady() {
 
 // Middleware to ensure DB is initialized on incoming requests
 app.use(async (req, res, next) => {
-  if (req.path.startsWith('/api')) {
-    await ensureDatabaseReady();
+  if (req.path.startsWith('/api') && req.path !== '/api/health') {
+    try {
+      await ensureDatabaseReady();
+    } catch (err: any) {
+      return res.status(500).json({
+        error: err.message || 'Database connection error',
+        code: 'DATABASE_ERROR',
+      });
+    }
   }
   next();
 });

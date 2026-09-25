@@ -1,5 +1,7 @@
 // FlowPilot AI PostgreSQL Schema Definition
 export const SCHEMA_SQL = `
+SET search_path TO public, extensions;
+
 CREATE TABLE IF NOT EXISTS organizations (
   id UUID PRIMARY KEY,
   name VARCHAR(255) NOT NULL,

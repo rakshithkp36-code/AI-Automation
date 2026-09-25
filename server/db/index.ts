@@ -9,8 +9,28 @@ interface QueryResult<T = any> {
 
 let pool: pg.Pool | null = null;
 let pgliteInstance: PGlite | null = null;
-let isConnecting = false;
 let connectPromise: Promise<{ type: 'pg' | 'pglite'; client: pg.Pool | PGlite }> | null = null;
+
+function getSupabasePoolerUrl(urlStr: string): string | null {
+  try {
+    const parsed = new URL(urlStr);
+    const host = parsed.hostname;
+    // Check if direct Supabase host: db.<ref>.supabase.co
+    if (host.startsWith('db.') && host.endsWith('.supabase.co')) {
+      const projectRef = host.split('.')[1];
+      const rawUser = decodeURIComponent(parsed.username || 'postgres');
+      const poolerUser = rawUser.includes('.') ? rawUser : `${rawUser}.${projectRef}`;
+      // Supabase pooler host for this project (Session mode port 5432, IPv4 compatible)
+      parsed.hostname = 'aws-0-ap-south-1.pooler.supabase.com';
+      parsed.username = poolerUser;
+      parsed.port = '5432';
+      return parsed.toString();
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 export async function getDb(): Promise<{ type: 'pg' | 'pglite'; client: pg.Pool | PGlite }> {
   if (pool) return { type: 'pg', client: pool };
@@ -26,36 +46,55 @@ export async function getDb(): Promise<{ type: 'pg' | 'pglite'; client: pg.Pool 
       const isSupabase = dbUrl.includes('supabase.co') || dbUrl.includes('pooler.supabase.com');
       console.log(`[DB] Connecting to ${isSupabase ? 'Supabase' : 'remote'} PostgreSQL database...`);
 
-      try {
-        const newPool = new pg.Pool({
-          connectionString: dbUrl,
-          ssl: isSupabase || isProduction ? { rejectUnauthorized: false } : undefined,
-          max: isProduction ? 10 : 20,
-          idleTimeoutMillis: 30000,
-          connectionTimeoutMillis: 10000,
-        });
-
-        // Test connection
-        await newPool.query('SELECT 1');
-        console.log('[DB] Successfully connected to PostgreSQL database.');
-        pool = newPool;
-        return { type: 'pg', client: pool };
-      } catch (err: any) {
-        console.error('[DB] Failed connecting to DATABASE_URL:', err.message);
-        if (isProduction) {
-          throw new Error(
-            `[DB Error] Unable to connect to Supabase PostgreSQL database: ${err.message}. ` +
-            'Please verify your DATABASE_URL in Vercel Project Environment Variables.'
-          );
-        }
-        console.warn('[DB] Falling back to local in-memory PostgreSQL engine for development.');
+      const urlsToTry = [dbUrl];
+      const poolerUrl = getSupabasePoolerUrl(dbUrl);
+      if (poolerUrl && poolerUrl !== dbUrl) {
+        // If direct IPv6 URL was supplied, also prepare IPv4 pooler URL as fallback for Vercel
+        urlsToTry.push(poolerUrl);
       }
+
+      let lastError: any = null;
+
+      for (const targetUrl of urlsToTry) {
+        try {
+          const newPool = new pg.Pool({
+            connectionString: targetUrl,
+            ssl: isSupabase || isProduction ? { rejectUnauthorized: false } : undefined,
+            max: isProduction ? 5 : 20,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000,
+          });
+
+          newPool.on('connect', (client) => {
+            client.query('SET search_path TO public, extensions;').catch(() => {});
+          });
+
+          // Test connection
+          await newPool.query('SELECT 1');
+          console.log('[DB] Successfully connected to PostgreSQL database.');
+          pool = newPool;
+          return { type: 'pg', client: pool };
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[DB] Connection attempt failed: ${err.message}`);
+        }
+      }
+
+      console.error('[DB] All PostgreSQL connection attempts failed:', lastError?.message);
+      if (isProduction) {
+        throw new Error(
+          `[DB Error] Unable to connect to Supabase PostgreSQL database: ${lastError?.message}. ` +
+          'On Vercel, ensure DATABASE_URL uses the Supabase Connection Pooler URL (IPv4): ' +
+          'postgresql://postgres.wwcjaystitznkkxqiljo:<PASSWORD>@aws-0-ap-south-1.pooler.supabase.com:5432/postgres'
+        );
+      }
+      console.warn('[DB] Falling back to local in-memory PostgreSQL engine for development.');
     }
 
     if (isProduction) {
       throw new Error(
         '[DB Error] DATABASE_URL is not configured in production. ' +
-        'Please set DATABASE_URL pointing to your Supabase PostgreSQL database in Vercel Project Settings.'
+        'Please set DATABASE_URL in Vercel Project Settings > Environment Variables pointing to your Supabase PostgreSQL database.'
       );
     }
 
@@ -107,6 +146,7 @@ export async function initSchema(): Promise<void> {
   console.log('[DB] Running database schema setup...');
   const db = await getDb();
   if (db.type === 'pg' && pool) {
+    await pool.query('SET search_path TO public, extensions;');
     await pool.query(SCHEMA_SQL);
   } else if (pgliteInstance) {
     await pgliteInstance.exec(SCHEMA_SQL);
