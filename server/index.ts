@@ -70,12 +70,15 @@ app.get('/api/health', (req, res) => {
 });
 
 // Serve frontend in production or if built
-const clientDistPath = path.resolve(__dirname, '../client/dist');
-if (fs.existsSync(clientDistPath)) {
-  app.use(express.static(clientDistPath));
+const clientDistPath = path.resolve(__dirname, '../../dist');
+const altClientDistPath = path.resolve(__dirname, '../client/dist');
+const targetDist = fs.existsSync(clientDistPath) ? clientDistPath : altClientDistPath;
+
+if (fs.existsSync(targetDist)) {
+  app.use(express.static(targetDist));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
-    res.sendFile(path.join(clientDistPath, 'index.html'));
+    res.sendFile(path.join(targetDist, 'index.html'));
   });
 }
 
@@ -88,19 +91,44 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-async function bootstrap() {
-  try {
-    console.log('[Server] Initializing database and verifying tables...');
-    await initSchema();
-    await seedDatabase();
+let dbReady = false;
+let initPromise: Promise<void> | null = null;
 
+export async function ensureDatabaseReady() {
+  if (dbReady) return;
+  if (!initPromise) {
+    initPromise = (async () => {
+      try {
+        console.log('[Server] Initializing database and verifying tables...');
+        await initSchema();
+        await seedDatabase();
+        dbReady = true;
+      } catch (err) {
+        console.error('[Database Init Error]', err);
+      }
+    })();
+  }
+  return initPromise;
+}
+
+// Middleware to ensure DB is initialized on incoming requests
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    await ensureDatabaseReady();
+  }
+  next();
+});
+
+export default app;
+
+// Only start standalone HTTP server when run directly (not on Vercel serverless)
+if (!process.env.VERCEL) {
+  ensureDatabaseReady().then(() => {
     app.listen(PORT, () => {
       console.log(`🚀 FlowPilot AI API server is running on http://localhost:${PORT}`);
     });
-  } catch (err) {
+  }).catch((err) => {
     console.error('[Server Bootstrap Error]', err);
     process.exit(1);
-  }
+  });
 }
-
-bootstrap();

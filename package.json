@@ -4,12 +4,16 @@
   "type": "module",
   "description": "FlowPilot AI - AI-Powered Smart Automation & Enterprise Workflow Orchestration Platform",
   "main": "server/index.ts",
+  "workspaces": [
+    "client"
+  ],
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:client": "npm --prefix client run dev",
+    "postinstall": "npm --prefix client install",
+    "build:client": "npm --prefix client install && npm --prefix client run build && node scripts/copy-dist.js",
     "build": "npm run build:client && tsc -p tsconfig.json",
-    "build:client": "npm --prefix client run build",
     "seed": "tsx server/db/seed.ts",
     "start": "node dist-server/server/index.js"
   },
