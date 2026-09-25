@@ -17,12 +17,20 @@
     "seed": "tsx server/db/seed.ts",
     "start": "node dist-server/server/index.js"
   },
-  "keywords": ["ai", "automation", "workflow", "smart-automation", "gemini", "hackathon"],
+  "keywords": [
+    "ai",
+    "automation",
+    "workflow",
+    "smart-automation",
+    "gemini",
+    "hackathon"
+  ],
   "author": "FlowPilot AI Team",
   "license": "MIT",
   "dependencies": {
     "@electric-sql/pglite": "^0.2.16",
     "@google/genai": "^2.24.0",
+    "@supabase/server": "^1.8.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
