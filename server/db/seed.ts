@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
-import { query, initSchema, saveSnapshot } from './index.js';
+import { query, initSchema } from './index.js';
 
 export async function seedDatabase() {
   console.log('[Seed] Initializing database schema...');
@@ -572,7 +572,6 @@ export async function seedDatabase() {
     ]
   );
 
-  await saveSnapshot();
   console.log('[Seed] Database seeded successfully with demo scenario data!');
 }
 

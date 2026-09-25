@@ -1,11 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import pg from 'pg';
 import { PGlite } from '@electric-sql/pglite';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { SCHEMA_SQL } from './schema.js';
 
 interface QueryResult<T = any> {
   rows: T[];
@@ -14,76 +9,70 @@ interface QueryResult<T = any> {
 
 let pool: pg.Pool | null = null;
 let pgliteInstance: PGlite | null = null;
-let saveSnapshotTimeout: NodeJS.Timeout | null = null;
+let isConnecting = false;
+let connectPromise: Promise<{ type: 'pg' | 'pglite'; client: pg.Pool | PGlite }> | null = null;
 
-const dataDir = path.resolve(__dirname, '../../data');
-const snapshotPath = path.resolve(dataDir, 'flowpilot_snapshot.tar.gz');
-
-export async function saveSnapshot() {
-  if (!pgliteInstance) return;
-  try {
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    const dump = await pgliteInstance.dumpDataDir('gzip');
-    const buffer = Buffer.from(await dump.arrayBuffer());
-    fs.writeFileSync(snapshotPath, buffer);
-  } catch (err) {
-    console.warn('[DB] Failed to save snapshot:', err);
-  }
-}
-
-function scheduleSnapshot() {
-  if (!pgliteInstance) return;
-  if (saveSnapshotTimeout) clearTimeout(saveSnapshotTimeout);
-  saveSnapshotTimeout = setTimeout(() => {
-    saveSnapshot();
-  }, 1000);
-}
-
-export async function getDb() {
+export async function getDb(): Promise<{ type: 'pg' | 'pglite'; client: pg.Pool | PGlite }> {
   if (pool) return { type: 'pg', client: pool };
   if (pgliteInstance) return { type: 'pglite', client: pgliteInstance };
+  if (connectPromise) return connectPromise;
 
-  const dbUrl = process.env.DATABASE_URL;
+  connectPromise = (async () => {
+    const dbUrl = process.env.DATABASE_URL;
+    const isProduction = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 
-  if (dbUrl && dbUrl.trim() !== '' && !dbUrl.includes('[') && !dbUrl.includes(']')) {
-    console.log('[DB] Connecting to remote PostgreSQL via DATABASE_URL...');
-    try {
-      pool = new pg.Pool({ connectionString: dbUrl });
-      await pool.query('SELECT 1');
-      console.log('[DB] Connected to PostgreSQL successfully.');
-      return { type: 'pg', client: pool };
-    } catch (err) {
-      console.warn('[DB] Failed connecting to DATABASE_URL, falling back to embedded PGlite engine:', err);
-      pool = null;
+    // Check if valid PostgreSQL connection string is provided
+    if (dbUrl && dbUrl.trim() !== '' && !dbUrl.includes('[YOUR-PASSWORD]') && !dbUrl.includes('[YOUR_PASSWORD]')) {
+      const isSupabase = dbUrl.includes('supabase.co') || dbUrl.includes('pooler.supabase.com');
+      console.log(`[DB] Connecting to ${isSupabase ? 'Supabase' : 'remote'} PostgreSQL database...`);
+
+      try {
+        const newPool = new pg.Pool({
+          connectionString: dbUrl,
+          ssl: isSupabase || isProduction ? { rejectUnauthorized: false } : undefined,
+          max: isProduction ? 10 : 20,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 10000,
+        });
+
+        // Test connection
+        await newPool.query('SELECT 1');
+        console.log('[DB] Successfully connected to PostgreSQL database.');
+        pool = newPool;
+        return { type: 'pg', client: pool };
+      } catch (err: any) {
+        console.error('[DB] Failed connecting to DATABASE_URL:', err.message);
+        if (isProduction) {
+          throw new Error(
+            `[DB Error] Unable to connect to Supabase PostgreSQL database: ${err.message}. ` +
+            'Please verify your DATABASE_URL in Vercel Project Environment Variables.'
+          );
+        }
+        console.warn('[DB] Falling back to local in-memory PostgreSQL engine for development.');
+      }
     }
-  }
 
-  // Embedded persistent PGlite PostgreSQL engine
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
-  if (fs.existsSync(snapshotPath)) {
-    console.log(`[DB] Restoring persistent PostgreSQL snapshot from ${snapshotPath}...`);
-    try {
-      const fileBuffer = fs.readFileSync(snapshotPath);
-      pgliteInstance = new PGlite({ loadDataDir: new Blob([fileBuffer]) });
-      await pgliteInstance.waitReady;
-      console.log('[DB] Embedded PostgreSQL engine restored successfully from snapshot.');
-      return { type: 'pglite', client: pgliteInstance };
-    } catch (e) {
-      console.warn('[DB] Snapshot restore failed, creating fresh instance:', e);
-      pgliteInstance = null;
+    if (isProduction) {
+      throw new Error(
+        '[DB Error] DATABASE_URL is not configured in production. ' +
+        'Please set DATABASE_URL pointing to your Supabase PostgreSQL database in Vercel Project Settings.'
+      );
     }
-  }
 
-  console.log('[DB] Initializing embedded persistent PostgreSQL (PGlite) engine...');
-  pgliteInstance = new PGlite();
-  await pgliteInstance.waitReady;
-  console.log('[DB] Embedded PostgreSQL (PGlite) engine is ready.');
-  return { type: 'pglite', client: pgliteInstance };
+    // Local in-memory PostgreSQL fallback for local development only (no filesystem writes)
+    console.log('[DB] Initializing local in-memory PostgreSQL (PGlite) engine...');
+    pgliteInstance = new PGlite();
+    await pgliteInstance.waitReady;
+    console.log('[DB] Local in-memory PostgreSQL engine is ready.');
+    return { type: 'pglite', client: pgliteInstance };
+  })();
+
+  try {
+    const result = await connectPromise;
+    return result;
+  } finally {
+    connectPromise = null;
+  }
 }
 
 export async function query<T = any>(sql: string, params: any[] = []): Promise<QueryResult<T>> {
@@ -105,13 +94,6 @@ export async function query<T = any>(sql: string, params: any[] = []): Promise<Q
     };
   } else if (pgliteInstance) {
     const res = await pgliteInstance.query(sql, safeParams);
-    
-    // Check if modifying data to schedule persistent snapshot
-    const upper = sql.trim().toUpperCase();
-    if (upper.startsWith('INSERT') || upper.startsWith('UPDATE') || upper.startsWith('DELETE') || upper.startsWith('CREATE')) {
-      scheduleSnapshot();
-    }
-
     return {
       rows: res.rows as T[],
       rowCount: (res as any).affectedRows ?? res.rows.length,
@@ -122,16 +104,12 @@ export async function query<T = any>(sql: string, params: any[] = []): Promise<Q
 }
 
 export async function initSchema(): Promise<void> {
-  const schemaPath = path.resolve(__dirname, 'schema.sql');
-  const sql = fs.readFileSync(schemaPath, 'utf-8');
-
-  console.log('[DB] Running database migrations...');
+  console.log('[DB] Running database schema setup...');
   const db = await getDb();
   if (db.type === 'pg' && pool) {
-    await pool.query(sql);
+    await pool.query(SCHEMA_SQL);
   } else if (pgliteInstance) {
-    await pgliteInstance.exec(sql);
-    await saveSnapshot();
+    await pgliteInstance.exec(SCHEMA_SQL);
   }
   console.log('[DB] Database schema initialized successfully.');
 }
