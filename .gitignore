@@ -1,0 +1,34 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment & Secrets
+.env
+.env.local
+.env.production
+
+# Build outputs
+dist/
+dist-server/
+build/
+client/dist/
+
+# SQLite / PGlite data & snapshots
+data/
+*.tar.gz
+*.sqlite
+*.db
+
+# Logs & scratch
+logs/
+*.log
+scratch/
+.system_generated/
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
