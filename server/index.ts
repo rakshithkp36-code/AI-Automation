@@ -45,6 +45,43 @@ app.use((req, res, next) => {
   next();
 });
 
+let dbReady = false;
+let initPromise: Promise<void> | null = null;
+
+export async function ensureDatabaseReady() {
+  if (dbReady) return;
+  if (!initPromise) {
+    initPromise = (async () => {
+      try {
+        console.log('[Server] Initializing database and verifying tables...');
+        await initSchema();
+        await seedDatabase();
+        dbReady = true;
+      } catch (err) {
+        initPromise = null;
+        console.error('[Database Init Error]', err);
+        throw err;
+      }
+    })();
+  }
+  return initPromise;
+}
+
+// Middleware: Guarantee database tables exist BEFORE any API route executes
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api') && req.path !== '/api/health') {
+    try {
+      await ensureDatabaseReady();
+    } catch (err: any) {
+      return res.status(500).json({
+        error: err.message || 'Database initialization error',
+        code: 'DATABASE_ERROR',
+      });
+    }
+  }
+  next();
+});
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/problems', problemsRoutes);
@@ -99,43 +136,6 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     error: err.message || 'Internal Server Error',
     code: err.code || 'SERVER_ERROR',
   });
-});
-
-let dbReady = false;
-let initPromise: Promise<void> | null = null;
-
-export async function ensureDatabaseReady() {
-  if (dbReady) return;
-  if (!initPromise) {
-    initPromise = (async () => {
-      try {
-        console.log('[Server] Initializing database and verifying tables...');
-        await initSchema();
-        await seedDatabase();
-        dbReady = true;
-      } catch (err) {
-        initPromise = null;
-        console.error('[Database Init Error]', err);
-        throw err;
-      }
-    })();
-  }
-  return initPromise;
-}
-
-// Middleware to ensure DB is initialized on incoming requests
-app.use(async (req, res, next) => {
-  if (req.path.startsWith('/api') && req.path !== '/api/health') {
-    try {
-      await ensureDatabaseReady();
-    } catch (err: any) {
-      return res.status(500).json({
-        error: err.message || 'Database connection error',
-        code: 'DATABASE_ERROR',
-      });
-    }
-  }
-  next();
 });
 
 export default app;

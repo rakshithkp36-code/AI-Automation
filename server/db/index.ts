@@ -113,18 +113,40 @@ export async function query<T = any>(sql: string, params: any[] = []): Promise<Q
     return p;
   });
 
-  if (db.type === 'pg' && pool) {
-    const res = await pool.query(sql, safeParams);
-    return {
-      rows: res.rows as T[],
-      rowCount: res.rowCount ?? res.rows.length,
-    };
-  } else if (pgliteInstance) {
-    const res = await pgliteInstance.query(sql, safeParams);
-    return {
-      rows: res.rows as T[],
-      rowCount: (res as any).affectedRows ?? res.rows.length,
-    };
+  try {
+    if (db.type === 'pg' && pool) {
+      const res = await pool.query(sql, safeParams);
+      return {
+        rows: res.rows as T[],
+        rowCount: res.rowCount ?? res.rows.length,
+      };
+    } else if (pgliteInstance) {
+      const res = await pgliteInstance.query(sql, safeParams);
+      return {
+        rows: res.rows as T[],
+        rowCount: (res as any).affectedRows ?? res.rows.length,
+      };
+    }
+  } catch (err: any) {
+    // 42P01 is PostgreSQL error code for undefined_table ('relation does not exist')
+    if (err.code === '42P01' || err.message?.includes('does not exist')) {
+      console.warn(`[DB] Relation does not exist (${err.message}). Auto-running schema migration and retrying query...`);
+      await initSchema();
+      if (db.type === 'pg' && pool) {
+        const res = await pool.query(sql, safeParams);
+        return {
+          rows: res.rows as T[],
+          rowCount: res.rowCount ?? res.rows.length,
+        };
+      } else if (pgliteInstance) {
+        const res = await pgliteInstance.query(sql, safeParams);
+        return {
+          rows: res.rows as T[],
+          rowCount: (res as any).affectedRows ?? res.rows.length,
+        };
+      }
+    }
+    throw err;
   }
 
   throw new Error('Database not initialized');
