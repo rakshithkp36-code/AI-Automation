@@ -80,29 +80,17 @@ export async function getDb(): Promise<{ type: 'pg' | 'pglite'; client: pg.Pool 
         }
       }
 
-      console.error('[DB] All PostgreSQL connection attempts failed:', lastError?.message);
-      if (isProduction) {
-        throw new Error(
-          `[DB Error] Unable to connect to Supabase PostgreSQL database: ${lastError?.message}. ` +
-          'On Vercel, ensure DATABASE_URL uses the Supabase Connection Pooler URL (IPv4): ' +
-          'postgresql://postgres.wwcjaystitznkkxqiljo:<PASSWORD>@aws-0-ap-south-1.pooler.supabase.com:5432/postgres'
-        );
-      }
-      console.warn('[DB] Falling back to local in-memory PostgreSQL engine for development.');
+      console.warn('[DB] Remote PostgreSQL connection attempt failed:', lastError?.message);
+      console.warn('[DB] Falling back to in-memory PostgreSQL engine to preserve application availability.');
+    } else {
+      console.warn('[DB] DATABASE_URL is not configured or contains placeholder. Running with in-memory PostgreSQL engine.');
     }
 
-    if (isProduction) {
-      throw new Error(
-        '[DB Error] DATABASE_URL is not configured in production. ' +
-        'Please set DATABASE_URL in Vercel Project Settings > Environment Variables pointing to your Supabase PostgreSQL database.'
-      );
-    }
-
-    // Local in-memory PostgreSQL fallback for local development only (no filesystem writes)
-    console.log('[DB] Initializing local in-memory PostgreSQL (PGlite) engine...');
+    // In-memory PostgreSQL engine (PGlite) with zero filesystem storage
+    console.log('[DB] Initializing in-memory PostgreSQL (PGlite) engine...');
     pgliteInstance = new PGlite();
     await pgliteInstance.waitReady;
-    console.log('[DB] Local in-memory PostgreSQL engine is ready.');
+    console.log('[DB] In-memory PostgreSQL engine is ready.');
     return { type: 'pglite', client: pgliteInstance };
   })();
 

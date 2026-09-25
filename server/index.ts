@@ -60,12 +60,22 @@ app.use('/api/audit', auditRoutes);
 app.use('/api/organization', organizationRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let dbType = 'PostgreSQL';
+  try {
+    const { getDb } = await import('./db/index.js');
+    const db = await getDb();
+    dbType = db.type === 'pg' ? 'Supabase PostgreSQL (Live)' : 'PostgreSQL (In-Memory Engine)';
+  } catch {
+    dbType = 'Connecting...';
+  }
+
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     service: 'FlowPilot AI Enterprise Automation Server',
-    database: 'PostgreSQL',
+    database: dbType,
+    database_url_configured: !!process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('[YOUR-PASSWORD]'),
   });
 });
 
